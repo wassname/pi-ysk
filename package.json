@@ -2,7 +2,7 @@
   "name": "pi-ysk",
   "version": "0.1.0",
   "description": "A periodic, tool-free session observer using Claude Code's You should know prompt",
-  "private": true,
+  "publishConfig": { "access": "public" },
   "type": "module",
   "license": "UNLICENSED",
   "author": "PI/OpenAI, for wassname",

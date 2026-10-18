@@ -7,7 +7,7 @@ It checks the conversation while the main agent works. If it finds something con
 ## Try it
 
 ```sh
-pi install /workspace/pi-ysk
+pi install npm:pi-ysk
 ```
 
 Reload Pi. Watching is on by default. To check immediately:
