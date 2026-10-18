@@ -1,0 +1,39 @@
+{
+  "name": "pi-ysk",
+  "version": "0.1.0",
+  "description": "A periodic, tool-free session observer using Claude Code's You should know prompt",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "author": "PI/OpenAI, for wassname",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wassname/pi-ysk.git"
+  },
+  "keywords": ["pi-package"],
+  "files": ["src/", "prompts/", "README.md"],
+  "pi": { "extensions": ["./src/index.ts"] },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/regression/*.test.ts",
+    "check": "tsc --noEmit",
+    "smoke": "node --experimental-strip-types scripts/smoke.ts"
+  },
+  "engines": { "node": ">=22.19.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-ai": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}
