@@ -17,7 +17,15 @@ Reload Pi, then:
 /you-should-know check
 ```
 
-Automatic checks start at main-loop step indices 6, 12, …, as in the dumped plugin. They use the current session model. To choose another:
+Automatic checks start at main-loop step indices 6, 12, …, as in the dumped plugin. They use the current session model unless you set a model in `~/.pi/agent/pi-ysk.json`:
+
+```json
+{
+  "model": "provider/model-id"
+}
+```
+
+Use `{}` or omit the file to use the current session model. The setting applies across sessions and is reread before each request, so JSON edits need no reload. These commands write the same file:
 
 ```text
 /you-should-know model provider/model-id

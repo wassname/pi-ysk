@@ -93,6 +93,22 @@ export function observerContext(messages: Message[], prompt: string): Context {
   return { messages: copied, tools: [] };
 }
 
+export function readModelSetting(path: string): string | null {
+  let text: string;
+  try { text = readFileSync(path, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const config: unknown = JSON.parse(text);
+  assert(config !== null && typeof config === "object" && !Array.isArray(config), "pi-ysk.json must contain an object");
+  assert(Object.keys(config).every(key => key === "model"), "pi-ysk.json only accepts a model setting");
+  const model = (config as { model?: unknown }).model;
+  if (model === undefined) return null;
+  assert(typeof model === "string" && /^[^/\s]+\/\S+$/.test(model), "pi-ysk.json model must be provider/model-id; omit model to use the session model");
+  return model;
+}
+
 export function resolveObserverModel(ctx: Pick<ExtensionContext, "model" | "modelRegistry">, override: string | null): Model<any> {
   let model = ctx.model;
   if (override !== null) {

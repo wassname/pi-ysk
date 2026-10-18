@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Context, Message, Usage } from "@earendil-works/pi-ai";
 import { buildSessionContext, convertToLlm, getAgentDir, getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
-import { backoff, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, requestObservation, requestText, resolveObserverModel, type ObserverState } from "./observer.ts";
+import { backoff, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, readModelSetting, requestObservation, requestText, resolveObserverModel, type ObserverState } from "./observer.ts";
 
 interface Check {
   model: string;
@@ -18,6 +18,7 @@ const entryType = "pi-ysk";
 
 export default function youShouldKnow(pi: ExtensionAPI) {
   const topicFile = join(getAgentDir(), "pi-ysk-topics.json");
+  const configFile = join(getAgentDir(), "pi-ysk.json");
   let state = newState();
   let last: Check | undefined;
   let inspection: { context: Context; response?: string } | undefined;
@@ -29,6 +30,16 @@ export default function youShouldKnow(pi: ExtensionAPI) {
   let userSubmissions = 0;
   let dialogs = 0;
 
+  function configuredModel(ctx: ExtensionContext) {
+    state.model = readModelSetting(configFile);
+    return resolveObserverModel(ctx, state.model);
+  }
+  function saveModelSetting(model: string | null) {
+    const temporary = `${configFile}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify(model === null ? {} : { model }, null, 2) + "\n", { mode: 0o600 });
+    renameSync(temporary, configFile);
+    state.model = model;
+  }
   function topics() {
     let text: string;
     try { text = readFileSync(topicFile, "utf8"); }
@@ -93,7 +104,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
         active = controller; note.explaining = true; render(ctx);
         const started = Date.now();
         try {
-          const model = resolveObserverModel(ctx, state.model);
+          const model = configuredModel(ctx);
           const context = observerContext(snapshot(ctx), explanationPrompt(note.line));
           inspection = { context };
           const result = await requestText(ctx, model, context, controller.signal);
@@ -132,7 +143,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     const started = Date.now();
     const record: Check = { model: state.model ?? "session", outcome: "error", latencyMs: 0 };
     try {
-      const model = resolveObserverModel(ctx, state.model);
+      const model = configuredModel(ctx);
       record.model = `${model.provider}/${model.id}`;
       topics();
       const context = observerContext(messages, observerPrompt(state.seen, state.known));
@@ -175,6 +186,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       state = structuredClone(data.state); last = data.last;
     }
     if (state.note) state.note.explaining = false;
+    state.model = readModelSetting(configFile);
     topics(); expireFeedback(ctx); render(ctx);
     if (ctx.mode === "tui") inputOff = ctx.ui.onTerminalInput(data => {
       const note = state.note;
@@ -221,17 +233,17 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       const [action = "status", ...rest] = args.trim().split(/\s+/);
       switch (action || "status") {
         case "on":
-          resolveObserverModel(ctx, state.model); state.enabled = true; save(); render(ctx);
+          configuredModel(ctx); state.enabled = true; save(); render(ctx);
           ctx.ui.notify("You should know is on. Checks use your model allowance.", "info"); break;
         case "off":
           cancel(); clearFeedbackTimer(); state.enabled = false; state.note = null; save(); render(ctx); break;
         case "check": void check(ctx, snapshot(ctx), true); break;
         case "model": {
-          if (!rest.length) { ctx.ui.notify(state.model ?? "Same model as this session", "info"); break; }
+          if (!rest.length) { state.model = readModelSetting(configFile); ctx.ui.notify(state.model ?? "Same model as this session", "info"); break; }
           const value = rest.join(" ");
           const selected = value === "session" ? null : value;
           const model = resolveObserverModel(ctx, selected);
-          cancel(); state.model = selected; save(); render(ctx);
+          cancel(); saveModelSetting(selected); save(); render(ctx);
           ctx.ui.notify(`You should know model: ${model.provider}/${model.id}`, "info"); break;
         }
         case "more": await answer(ctx, "more"); break;
@@ -241,6 +253,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
         case "inspect":
           await ctx.ui.editor("Last observer request and response (not sent to the main agent)", JSON.stringify({ promptSha256, ...inspection, last }, null, 2)); break;
         case "status":
+          state.model = readModelSetting(configFile);
           ctx.ui.notify(JSON.stringify({ enabled: state.enabled, model: state.model ?? "session", checking: !!active, last }, null, 2), "info"); break;
         default: ctx.ui.notify(`Use /${command} on|off|check|model [provider/id|session]|more|knew|dismiss|discuss|status|inspect`, "info");
       }

@@ -1,6 +1,6 @@
 // PI/OpenAI: maintained functional regressions; development probes stay outside this suite.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -98,6 +98,7 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     await command("check", ctx); requests[1].resolve(response(note)); await flush();
     assert.equal(stored().last.outcome, "duplicate");
     await command("model other/cheap", ctx);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), { model: "other/cheap" });
     await command("check", ctx); assert.equal(requests[2].model.provider, "other");
     emit("before_agent_start"); assert.equal(requests[2].options.signal.aborted, true);
     requests[2].resolve(response(note.replace("benchmark", "measurement"))); await flush();
@@ -115,6 +116,17 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     requests[5].resolve(response("**Old-model explanation**\nDo not adopt this stale result.")); await expanding;
     assert.equal(stored().state.note!.explanation, "");
     await command("knew", ctx); assert.equal(stored().state.note, null);
+    writeFileSync(join(dir, "pi-ysk.json"), JSON.stringify({ model: "configured/family" }));
+    await command("check", ctx); assert.equal(requests[6].model.provider, "configured");
+    requests[6].resolve(response("learn: none")); await flush();
+    writeFileSync(join(dir, "pi-ysk.json"), "{}"); emit("session_tree");
+    await command("check", ctx); assert.equal(requests[7].model, model);
+    requests[7].resolve(response("learn: none")); await flush();
+    await command("model session", ctx);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), {});
+    writeFileSync(join(dir, "pi-ysk.json"), '{"model":42}');
+    await command("check", ctx); assert.equal(requests.length, 8);
+    assert(notifications.some(text => text.includes("pi-ysk.json model must be")));
     assert.deepEqual(buildSessionContext(manager.getEntries()).messages, mainBefore);
     assert(!notifications.some(text => text.includes("Observer response")));
     emit("session_shutdown");
