@@ -36,7 +36,7 @@ export interface ObserverState {
   skip: number;
 }
 export const newState = (): ObserverState => ({
-  enabled: false, model: null, seen: [], known: [], note: null, ignored: 0, skip: 0,
+  enabled: true, model: null, seen: [], known: [], note: null, ignored: 0, skip: 0,
 });
 export const lineKey = (text: string) => text.toLowerCase().trim().replace(/\.$/, "");
 export const backoff = (ignored: number) => ignored <= 2 ? 0 : Math.min(16, 2 ** (ignored - 3));
@@ -93,20 +93,21 @@ export function observerContext(messages: Message[], prompt: string): Context {
   return { messages: copied, tools: [] };
 }
 
-export function readModelSetting(path: string): string | null {
+export interface ObserverSettings { enabled: boolean; model: string | null }
+export function readSettings(path: string): ObserverSettings {
   let text: string;
   try { text = readFileSync(path, "utf8"); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { enabled: true, model: null };
     throw error;
   }
   const config: unknown = JSON.parse(text);
   assert(config !== null && typeof config === "object" && !Array.isArray(config), "pi-ysk.json must contain an object");
-  assert(Object.keys(config).every(key => key === "model"), "pi-ysk.json only accepts a model setting");
-  const model = (config as { model?: unknown }).model;
-  if (model === undefined) return null;
-  assert(typeof model === "string" && /^[^/\s]+\/\S+$/.test(model), "pi-ysk.json model must be provider/model-id; omit model to use the session model");
-  return model;
+  assert(Object.keys(config).every(key => key === "model" || key === "enabled"), "pi-ysk.json only accepts model and enabled settings");
+  const { model, enabled } = config as { model?: unknown; enabled?: unknown };
+  assert(enabled === undefined || typeof enabled === "boolean", "pi-ysk.json enabled must be true or false");
+  assert(model === undefined || typeof model === "string" && /^[^/\s]+\/\S+$/.test(model), "pi-ysk.json model must be provider/model-id; omit model to use the session model");
+  return { enabled: enabled ?? true, model: model ?? null };
 }
 
 export function resolveObserverModel(ctx: Pick<ExtensionContext, "model" | "modelRegistry">, override: string | null): Model<any> {

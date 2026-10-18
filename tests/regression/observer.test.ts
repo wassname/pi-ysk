@@ -69,6 +69,7 @@ test("the extension checks asynchronously, remembers notes, supports model choic
         getEditorText() { return editor; }, setEditorText(text: string) { editor = text; },
       },
       modelRegistry: {
+        async refresh() { return { aborted: false, errors: new Map() }; },
         find(provider: string, id: string) { return { ...model, provider, id }; }, hasConfiguredAuth() { return true; },
         streamSimple(selected: unknown, context: Context, options: unknown) {
           const result = new Promise<AssistantMessage>(resolve => requests.push({ model: selected, context, options, resolve }));
@@ -79,7 +80,9 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     const emit = (name: string, event: any = {}) => events.get(name)!(event, ctx);
     const stored = () => (manager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === "pi-ysk") as any).data as { state: ObserverState; last: { outcome: string } };
     youShouldKnow(api);
-    emit("session_start");
+    await emit("session_start");
+    await command("status", ctx); assert.equal(JSON.parse(notifications.at(-1)!).enabled, true);
+    await command("off", ctx); assert.equal(stored().state.enabled, false);
     const step = (index: number) => emit("turn_start", { turnIndex: index });
     step(6); assert.equal(requests.length, 0);
     await command("on", ctx);
@@ -102,9 +105,11 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     requests[1].resolve(response(note)); await flush();
     assert.equal(stored().last.outcome, "duplicate");
     assert(notifications.includes("Checked: that topic was already shown or understood."));
+    await command("off", ctx);
     await command("model other/cheap", ctx);
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), { model: "other/cheap" });
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), { enabled: false, model: "other/cheap" });
     await command("check", ctx); assert.equal(requests[2].model.provider, "other");
+    assert.equal(stored().state.enabled, true);
     emit("before_agent_start"); assert.equal(requests[2].options.signal.aborted, true);
     requests[2].resolve(response(note.replace("benchmark", "measurement"))); await flush();
     assert.equal(stored().state.note, null);
@@ -131,8 +136,8 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     await command("model session", ctx);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), {});
     writeFileSync(join(dir, "pi-ysk.json"), '{"model":42}');
-    await command("check", ctx); assert.equal(requests.length, 8);
-    assert(notifications.some(text => text.includes("pi-ysk.json model must be")));
+    await assert.rejects(command("check", ctx), /pi-ysk.json model must be/);
+    assert.equal(requests.length, 8);
     assert.deepEqual(buildSessionContext(manager.getEntries()).messages, mainBefore);
     assert(!notifications.some(text => text.includes("Observer response")));
     emit("session_shutdown");

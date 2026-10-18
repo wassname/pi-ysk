@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Context, Message, Usage } from "@earendil-works/pi-ai";
 import { buildSessionContext, convertToLlm, getAgentDir, getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
-import { backoff, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, readModelSetting, requestObservation, requestText, resolveObserverModel, type ObserverState } from "./observer.ts";
+import { backoff, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, readSettings, requestObservation, requestText, resolveObserverModel, type ObserverSettings, type ObserverState } from "./observer.ts";
 
 interface Check {
   model: string;
@@ -30,15 +30,18 @@ export default function youShouldKnow(pi: ExtensionAPI) {
   let userSubmissions = 0;
   let dialogs = 0;
 
+  function refreshSettings() { Object.assign(state, readSettings(configFile)); }
   function configuredModel(ctx: ExtensionContext) {
-    state.model = readModelSetting(configFile);
+    refreshSettings();
     return resolveObserverModel(ctx, state.model);
   }
-  function saveModelSetting(model: string | null) {
+  function saveSettings(update: Partial<ObserverSettings>) {
+    const settings = { ...readSettings(configFile), ...update };
     const temporary = `${configFile}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify(model === null ? {} : { model }, null, 2) + "\n", { mode: 0o600 });
+    const json = { ...(settings.enabled ? {} : { enabled: false }), ...(settings.model === null ? {} : { model: settings.model }) };
+    writeFileSync(temporary, JSON.stringify(json, null, 2) + "\n", { mode: 0o600 });
     renameSync(temporary, configFile);
-    state.model = model;
+    Object.assign(state, settings);
   }
   function topics() {
     let text: string;
@@ -71,13 +74,13 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
     ctx.ui.setStatus(entryType, state.enabled ? `YSK ${active ? "checking" : state.model ?? "session model"}` : undefined);
     const note = state.note;
-    ctx.ui.setWidget(entryType, note ? () => {
+    ctx.ui.setWidget(entryType, note ? (_tui, theme) => {
       const view = new Container();
       if (note.feedbackUntil !== undefined) {
         view.addChild(new Text("Dismissed.", 0, 0));
         view.addChild(new Text(note.expanded ? "1: That was helpful   2: Didn't understand   0: Dismiss" : "1: That was helpful   2: Not relevant   3: Couldn't understand   4: Turn off suggestions   0: Dismiss", 0, 0));
       } else {
-        view.addChild(new Text(`✦ ${note.tag} · ${note.line}`, 0, 0));
+        view.addChild(new Text(`${theme.fg("accent", `✦ ${note.tag} ·`)} ${note.line}`, 0, 0));
         if (note.explaining) view.addChild(new Text("Explaining…", 0, 0));
         else if (note.expanded) view.addChild(new Markdown(note.explanation, 0, 0, getMarkdownTheme()));
         view.addChild(new Text(note.expanded ? "1: Understood   2: Chat in main session   0: Dismiss" : "1: Learn more   2: Knew this already   0: Dismiss   3: What is this?", 0, 0));
@@ -142,6 +145,8 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       if (manual) ctx.ui.notify("A note is already displayed. Use /you-should-know more or dismiss.", "info");
       return;
     }
+    try { refreshSettings(); }
+    catch (error) { ctx.ui.notify(`You should know: ${String(error)}`, "error"); return; }
     if (!manual && (!state.enabled || offeredThisRun)) return;
     topics();
     if (!manual && state.skip > 0) { state.skip--; saveTopics(); save(); return; }
@@ -200,7 +205,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       state = structuredClone(data.state); last = data.last;
     }
     if (state.note) state.note.explaining = false;
-    state.model = readModelSetting(configFile);
+    refreshSettings();
     topics(); expireFeedback(ctx); render(ctx);
     if (ctx.mode === "tui") inputOff = ctx.ui.onTerminalInput(data => {
       const note = state.note;
@@ -208,7 +213,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       if (note.feedbackUntil === undefined && data === "3" && !note.expanded) {
         ctx.ui.notify("A side agent watches this conversation for things you may have missed. It has no tools. Use /you-should-know off to disable it.", "info");
       } else if (note.feedbackUntil !== undefined && data === "4" && !note.expanded) {
-        cancel(); clearFeedbackTimer(); state.enabled = false; state.note = null; save(); render(ctx);
+        cancel(); clearFeedbackTimer(); saveSettings({ enabled: false }); state.note = null; save(); render(ctx);
       } else {
         const action = note.feedbackUntil !== undefined
           ? data === "1" ? "known" : data === "0" ? "dismiss" : data === "2" || data === "3" && !note.expanded ? "clear" : undefined
@@ -219,7 +224,11 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       return { consume: true };
     });
   }
-  pi.on("session_start", (_event, ctx) => restore(ctx));
+  pi.on("session_start", async (_event, ctx) => {
+    const { model } = readSettings(configFile);
+    if (model) await ctx.modelRegistry.refresh({ allowNetwork: false, providers: [model.slice(0, model.indexOf("/"))] });
+    restore(ctx);
+  });
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("session_compact", (_event, ctx) => { cancel(); render(ctx); });
   pi.on("model_select", (_event, ctx) => { cancel(); render(ctx); });
@@ -228,7 +237,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
   pi.on("ui_prompt_end", () => { dialogs = Math.max(0, dialogs - 1); });
   pi.on("input", event => { if (event.source !== "extension") userSubmissions++; });
   pi.on("before_agent_start", (_event, ctx) => {
-    cancel(); offeredThisRun = false; topics();
+    cancel(); offeredThisRun = false; refreshSettings(); topics();
     if (state.note?.feedbackUntil !== undefined) { clearFeedbackTimer(); state.note = null; }
     if (state.note && !state.note.expanded) {
       state.note.promptsSurvived += userSubmissions;
@@ -247,17 +256,19 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       const [action = "status", ...rest] = args.trim().split(/\s+/);
       switch (action || "status") {
         case "on":
-          configuredModel(ctx); state.enabled = true; save(); render(ctx);
+          configuredModel(ctx); saveSettings({ enabled: true }); save(); render(ctx);
           ctx.ui.notify("You should know is on. Checks use your model allowance.", "info"); break;
         case "off":
-          cancel(); clearFeedbackTimer(); state.enabled = false; state.note = null; save(); render(ctx); break;
-        case "check": void check(ctx, snapshot(ctx), true); break;
+          cancel(); clearFeedbackTimer(); saveSettings({ enabled: false }); state.note = null; save(); render(ctx); break;
+        case "check":
+          configuredModel(ctx); saveSettings({ enabled: true }); save(); render(ctx);
+          void check(ctx, snapshot(ctx), true); break;
         case "model": {
-          if (!rest.length) { state.model = readModelSetting(configFile); ctx.ui.notify(state.model ?? "Same model as this session", "info"); break; }
+          if (!rest.length) { refreshSettings(); ctx.ui.notify(state.model ?? "Same model as this session", "info"); break; }
           const value = rest.join(" ");
           const selected = value === "session" ? null : value;
           const model = resolveObserverModel(ctx, selected);
-          cancel(); saveModelSetting(selected); save(); render(ctx);
+          cancel(); saveSettings({ model: selected }); save(); render(ctx);
           ctx.ui.notify(`You should know model: ${model.provider}/${model.id}`, "info"); break;
         }
         case "more": await answer(ctx, "more"); break;
@@ -267,7 +278,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
         case "inspect":
           await ctx.ui.editor("Last observer request and response (not sent to the main agent)", JSON.stringify({ promptSha256, ...inspection, last }, null, 2)); break;
         case "status":
-          state.model = readModelSetting(configFile);
+          refreshSettings();
           ctx.ui.notify(JSON.stringify({ enabled: state.enabled, model: state.model ?? "session", checking: !!active, last }, null, 2), "info"); break;
         default: ctx.ui.notify(`Use /${command} on|off|check|model [provider/id|session]|more|knew|dismiss|discuss|status|inspect`, "info");
       }

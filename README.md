@@ -10,33 +10,35 @@ It checks the conversation while the main agent works. If it finds something con
 pi install /workspace/pi-ysk
 ```
 
-Reload Pi, then:
+Reload Pi. Watching is on by default. To check immediately:
 
 ```text
-/you-should-know on
 /you-should-know check
 ```
 
 Manual checks report progress and completion, including “nothing worth flagging.” Automatic checks stay quiet unless they have a note or an error.
 
-Automatic checks start at main-loop step indices 6, 12, …, as in the dumped plugin. They use the current session model unless you set a model in `~/.pi/agent/pi-ysk.json`:
+Automatic checks start at main-loop step indices 6, 12, …, as in the dumped plugin. Settings are in `~/.pi/agent/pi-ysk.json`. Suggested low-cost model, if configured in Pi:
 
 ```json
 {
-  "model": "provider/model-id"
+  "enabled": true,
+  "model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"
 }
 ```
 
-Use `{}` or omit the file to use the current session model. The setting applies across sessions and is reread before each request, so JSON edits need no reload. These commands write the same file:
+This uses DeepInfra directly. The model and credentials must exist in Pi; see [compatible-endpoint configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#configure-a-compatible-endpoint).
+
+Omit `model` to use the current session model. Omit `enabled` to default to on; set it to `false` to stop automatic checks. Settings apply across sessions and are reread before requests, so JSON edits need no reload. These commands write the same file:
 
 ```text
 /you-should-know model provider/model-id
 /you-should-know model session
 ```
 
-The selected provider receives the conversation and full prompt. Requests consume model usage. The extension starts off in a new session.
+The selected provider receives the conversation and full prompt. Requests consume model usage. `/you-should-know check` enables watching and checks immediately; `/you-should-know off` stops automatic checks.
 
-When a note appears, with an empty input:
+Notes use the theme's accent colour for the star and label. With an empty input:
 
 - `1`: learn more; then `1` marks it understood.
 - `2`: already understood; in the explanation, `2` puts the note in your input for discussion.
@@ -54,7 +56,7 @@ npm run check
 npm run smoke
 ```
 
-There are two maintained functional regression tests. `smoke` makes a real provider request using synthetic evidence and your configured default model, or a `provider/model-id` argument. Temporary development checks are separate from the default suite.
+There are two maintained functional regression tests. `smoke` makes a real provider request using synthetic evidence and the configured observer model (or session default if unset), or a `provider/model-id` argument. Temporary development checks are separate from the default suite.
 
 Pi's SDK/UI packages are optional peers, supplied by the Pi host rather than bundled. Tested against Pi 1.1.0. This repository does not grant a new license to Anthropic's extracted prompt.
 

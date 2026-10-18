@@ -4,10 +4,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { getAgentDir, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { observerContext, observerPrompt, promptSha256, requestObservation } from "../src/observer.ts";
+import { observerContext, observerPrompt, promptSha256, readSettings, requestObservation } from "../src/observer.ts";
 
 const settings = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8"));
-const modelId = process.argv[2] ?? `${settings.defaultProvider}/${settings.defaultModel}`;
+const observerSettings = readSettings(join(getAgentDir(), "pi-ysk.json"));
+const modelId = process.argv[2] ?? observerSettings.model ?? `${settings.defaultProvider}/${settings.defaultModel}`;
 const slash = modelId.indexOf("/");
 assert(slash > 0, "Pass provider/model-id");
 const runtime = await ModelRuntime.create();
