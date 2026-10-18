@@ -4,6 +4,12 @@ Claude Code's **You should know** observer for Pi, using the [original 2.1.292 p
 
 It checks the conversation while the main agent works. If it finds something consequential you may have missed, it shows a short note above the editor. It has no tools and leaves the main conversation unchanged.
 
+
+<img width="2195" height="96" alt="image" src="https://github.com/user-attachments/assets/cb5f35a8-d715-4e4c-98fd-154474f0c408" />
+
+<img width="2189" height="335" alt="image" src="https://github.com/user-attachments/assets/3e01e0c5-ae2a-4d94-ab8c-efd3e6beaac1" />
+<img width="2200" height="459" alt="image" src="https://github.com/user-attachments/assets/da3557a9-b4da-4b38-83d1-c71dc73bb82b" />
+
 ## Try it
 
 ```sh
