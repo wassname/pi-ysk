@@ -17,6 +17,8 @@ Reload Pi, then:
 /you-should-know check
 ```
 
+Manual checks report progress and completion, including “nothing worth flagging.” Automatic checks stay quiet unless they have a note or an error.
+
 Automatic checks start at main-loop step indices 6, 12, …, as in the dumped plugin. They use the current session model unless you set a model in `~/.pi/agent/pi-ysk.json`:
 
 ```json

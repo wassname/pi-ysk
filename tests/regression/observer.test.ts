@@ -95,8 +95,13 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     assert.equal(stored().state.note!.promptsSurvived, 1);
     await command("more", ctx); assert.equal(requests.length, 1);
     await command("knew", ctx); assert.equal(stored().state.known.length, 1);
-    await command("check", ctx); requests[1].resolve(response(note)); await flush();
+    await command("check", ctx);
+    assert(notifications.some(text => text.startsWith("Checking with test/main")));
+    await command("check", ctx); assert.equal(requests.length, 2);
+    assert(notifications.includes("You should know is already checking."));
+    requests[1].resolve(response(note)); await flush();
     assert.equal(stored().last.outcome, "duplicate");
+    assert(notifications.includes("Checked: that topic was already shown or understood."));
     await command("model other/cheap", ctx);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), { model: "other/cheap" });
     await command("check", ctx); assert.equal(requests[2].model.provider, "other");
@@ -119,6 +124,7 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     writeFileSync(join(dir, "pi-ysk.json"), JSON.stringify({ model: "configured/family" }));
     await command("check", ctx); assert.equal(requests[6].model.provider, "configured");
     requests[6].resolve(response("learn: none")); await flush();
+    assert(notifications.includes("Checked: nothing worth flagging."));
     writeFileSync(join(dir, "pi-ysk.json"), "{}"); emit("session_tree");
     await command("check", ctx); assert.equal(requests[7].model, model);
     requests[7].resolve(response("learn: none")); await flush();

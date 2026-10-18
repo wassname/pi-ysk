@@ -134,7 +134,15 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     return convertToLlm(buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages);
   }
   async function check(ctx: ExtensionContext, messages: Message[], manual = false) {
-    if (active || state.note || (!manual && (!state.enabled || offeredThisRun))) return;
+    if (active) {
+      if (manual) ctx.ui.notify("You should know is already checking.", "info");
+      return;
+    }
+    if (state.note) {
+      if (manual) ctx.ui.notify("A note is already displayed. Use /you-should-know more or dismiss.", "info");
+      return;
+    }
+    if (!manual && (!state.enabled || offeredThisRun)) return;
     topics();
     if (!manual && state.skip > 0) { state.skip--; saveTopics(); save(); return; }
     const epoch = generation;
@@ -145,6 +153,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     try {
       const model = configuredModel(ctx);
       record.model = `${model.provider}/${model.id}`;
+      if (manual) ctx.ui.notify(`Checking with ${record.model}…`, "info");
       topics();
       const context = observerContext(messages, observerPrompt(state.seen, state.known));
       inspection = { context };
@@ -164,6 +173,11 @@ export default function youShouldKnow(pi: ExtensionAPI) {
           record.outcome = "shown";
         }
       }
+      if (manual) ctx.ui.notify(record.outcome === "none"
+        ? "Checked: nothing worth flagging."
+        : record.outcome === "duplicate"
+          ? "Checked: that topic was already shown or understood."
+          : "Checked: a note is ready above the input.", "info");
     } catch (error) {
       if (epoch !== generation || controller.signal.aborted || ctx.signal?.aborted) return;
       record.error = error instanceof Error ? error.message : String(error);
