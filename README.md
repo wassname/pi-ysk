@@ -33,6 +33,8 @@ Automatic checks start at main-loop step indices 20, 40, …. Set a positive int
 }
 ```
 
+Watching also runs one awaited check immediately before manual or automatic compaction, using the full pre-summary context. This bypasses the interval and ignored-note backoff, but respects `enabled: false`. If a note is already open, any new note is saved behind it and shown after it is dealt with. Saved notes survive compaction and reload. If the check fails, Pi reports the error and compaction continues.
+
 The observer uses the current session model by default. To select another model, add `"model": "provider/model-id"`. The model and credentials must exist in Pi; see [compatible-endpoint configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#configure-a-compatible-endpoint).
 
 Omit `intervalTurns` to use 20. Omit `enabled` to default to on; set it to `false` to stop automatic checks. Settings apply across sessions and are reread before each step/check, so JSON edits need no reload. These commands write the same file:

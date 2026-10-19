@@ -34,11 +34,12 @@ export interface ObserverState {
   seen: string[];
   known: string[];
   note: Note | null;
+  pendingNotes: Note[];
   ignored: number;
   skip: number;
 }
 export const newState = (): ObserverState => ({
-  enabled: true, intervalTurns: defaultIntervalTurns, model: null, seen: [], known: [], note: null, ignored: 0, skip: 0,
+  enabled: true, intervalTurns: defaultIntervalTurns, model: null, seen: [], known: [], note: null, pendingNotes: [], ignored: 0, skip: 0,
 });
 export const lineKey = (text: string) => text.toLowerCase().trim().replace(/\.$/, "");
 export const backoff = (ignored: number) => ignored <= 2 ? 0 : Math.min(16, 2 ** (ignored - 3));

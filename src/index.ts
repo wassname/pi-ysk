@@ -7,6 +7,7 @@ import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { backoff, defaultIntervalTurns, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, readSettings, requestObservation, requestText, resolveObserverModel, type ObserverSettings, type ObserverState } from "./observer.ts";
 
 interface Check {
+  trigger?: "interval" | "manual" | "compaction";
   model: string;
   outcome: string;
   latencyMs: number;
@@ -85,14 +86,19 @@ export default function youShouldKnow(pi: ExtensionAPI) {
         else if (note.expanded) view.addChild(new Markdown(note.explanation, 0, 0, getMarkdownTheme()));
         view.addChild(new Text(note.expanded ? "1: Understood   2: Chat in main session   0: Dismiss" : "1: Learn more   2: Knew this already   0: Dismiss   3: What is this?", 0, 0));
       }
+      if (state.pendingNotes.length) view.addChild(new Text(`More notes saved: ${state.pendingNotes.length}.`, 0, 0));
       return view;
     } : undefined);
+  }
+  function advanceNote() {
+    state.note = state.pendingNotes.shift() ?? null;
+    userSubmissions = 0;
   }
   function clearFeedbackTimer() { clearTimeout(feedbackTimer); feedbackTimer = undefined; }
   function expireFeedback(ctx: ExtensionContext) {
     clearFeedbackTimer();
     if (state.note?.feedbackUntil === undefined) return;
-    feedbackTimer = setTimeout(() => { state.note = null; save(); render(ctx); }, Math.max(0, state.note.feedbackUntil - Date.now()));
+    feedbackTimer = setTimeout(() => { advanceNote(); save(); render(ctx); }, Math.max(0, state.note.feedbackUntil - Date.now()));
     feedbackTimer.unref();
   }
   async function answer(ctx: ExtensionContext, action: "more" | "known" | "dismiss" | "discuss" | "clear") {
@@ -129,7 +135,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     } else {
       if (action === "discuss") ctx.ui.setEditorText(discussionDraft(note) + "\n\n");
       if (action === "known" || action === "discuss") remember("known", note.line);
-      clearFeedbackTimer(); state.note = null;
+      clearFeedbackTimer(); advanceNote();
     }
     save(); render(ctx);
   }
@@ -143,25 +149,27 @@ export default function youShouldKnow(pi: ExtensionAPI) {
   function snapshot(ctx: ExtensionContext): Message[] {
     return convertToLlm(buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages);
   }
-  async function check(ctx: ExtensionContext, messages: Message[], manual = false) {
-    if (active) {
+  async function check(ctx: ExtensionContext, messages: Message[], options: { manual?: boolean; beforeCompaction?: boolean; signal?: AbortSignal } = {}) {
+    const { manual = false, beforeCompaction = false, signal: externalSignal = ctx.signal } = options;
+    if (active && !beforeCompaction) {
       if (manual) ctx.ui.notify("You should know is already checking.", "info");
       return;
     }
-    if (state.note) {
+    if (state.note && !beforeCompaction) {
       if (manual) ctx.ui.notify("A note is already displayed. Use /you-should-know more or dismiss.", "info");
       return;
     }
     try { refreshSettings(); }
     catch (error) { ctx.ui.notify(`You should know: ${String(error)}`, "error"); return; }
-    if (!manual && (!state.enabled || offeredThisRun)) return;
+    if (!manual && (!state.enabled || !beforeCompaction && offeredThisRun)) return;
     topics();
-    if (!manual && state.skip > 0) { state.skip--; saveTopics(); save(); return; }
+    if (!manual && !beforeCompaction && state.skip > 0) { state.skip--; saveTopics(); save(); return; }
+    if (beforeCompaction) cancel();
     const epoch = generation;
     const controller = new AbortController();
     active = controller;
     const started = Date.now();
-    const record: Check = { model: state.model ?? "session", outcome: "error", latencyMs: 0 };
+    const record: Check = { trigger: beforeCompaction ? "compaction" : manual ? "manual" : "interval", model: state.model ?? "session", outcome: "error", latencyMs: 0 };
     try {
       const model = configuredModel(ctx);
       record.model = `${model.provider}/${model.id}`;
@@ -170,19 +178,19 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       const context = observerContext(messages, observerPrompt(state.seen, state.known));
       inspection = { context };
       render(ctx);
-      const signal = ctx.signal ? AbortSignal.any([controller.signal, ctx.signal]) : controller.signal;
+      const signal = externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal;
       const result = await requestObservation(ctx, model, context, signal, forkOptions(ctx, model));
       if (epoch !== generation || signal.aborted) return;
       inspection.response = result.text;
       record.usage = result.usage;
       record.outcome = "none";
       if (result.note) {
-        if ([...state.seen, ...state.known].some(line => lineKey(line) === lineKey(result.note!.line))) record.outcome = "duplicate";
+        if ([...state.seen, ...state.known, ...state.pendingNotes.map(note => note.line), ...(state.note ? [state.note.line] : [])].some(line => lineKey(line) === lineKey(result.note!.line))) record.outcome = "duplicate";
         else {
           remember("seen", result.note.line);
-          state.note = result.note; userSubmissions = 0;
+          if (state.note) { state.pendingNotes.push(result.note); record.outcome = "queued"; }
+          else { state.note = result.note; userSubmissions = 0; record.outcome = "shown"; }
           offeredThisRun = true;
-          record.outcome = "shown";
         }
       }
       if (manual) ctx.ui.notify(record.outcome === "none"
@@ -191,7 +199,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
           ? "Checked: that topic was already shown or understood."
           : "Checked: a note is ready above the input.", "info");
     } catch (error) {
-      if (epoch !== generation || controller.signal.aborted || ctx.signal?.aborted) return;
+      if (epoch !== generation || controller.signal.aborted || externalSignal?.aborted) return;
       record.error = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(`You should know: ${record.error}`, "error");
     } finally {
@@ -209,7 +217,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     const stored = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === entryType);
     if (stored?.type === "custom") {
       const data = stored.data as { state: ObserverState; last?: Check };
-      state = structuredClone(data.state); last = data.last;
+      state = { ...newState(), ...structuredClone(data.state) }; last = data.last;
     }
     if (state.note) state.note.explaining = false;
     refreshSettings();
@@ -220,7 +228,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       if (note.feedbackUntil === undefined && data === "3" && !note.expanded) {
         ctx.ui.notify("A side agent watches this conversation for things you may have missed. It has no tools. Use /you-should-know off to disable it.", "info");
       } else if (note.feedbackUntil !== undefined && data === "4" && !note.expanded) {
-        cancel(); clearFeedbackTimer(); saveSettings({ enabled: false }); state.note = null; save(); render(ctx);
+        cancel(); clearFeedbackTimer(); saveSettings({ enabled: false }); state.note = null; state.pendingNotes = []; save(); render(ctx);
       } else {
         const action = note.feedbackUntil !== undefined
           ? data === "1" ? "known" : data === "0" ? "dismiss" : data === "2" || data === "3" && !note.expanded ? "clear" : undefined
@@ -237,6 +245,9 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     restore(ctx);
   });
   pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("session_before_compact", async (event, ctx) => {
+    if (ctx.mode === "tui") await check(ctx, snapshot(ctx), { beforeCompaction: true, signal: event.signal });
+  });
   pi.on("session_compact", (_event, ctx) => { cancel(); render(ctx); });
   pi.on("model_select", (_event, ctx) => { cancel(); render(ctx); });
   pi.on("session_shutdown", (_event, ctx) => { cancel(); clearFeedbackTimer(); inputOff?.(); inputOff = undefined; ctx.ui.setWidget(entryType, undefined); ctx.ui.setStatus(entryType, undefined); });
@@ -245,10 +256,10 @@ export default function youShouldKnow(pi: ExtensionAPI) {
   pi.on("input", event => { if (event.source !== "extension") userSubmissions++; });
   pi.on("before_agent_start", (_event, ctx) => {
     cancel(); offeredThisRun = false; refreshSettings(); topics();
-    if (state.note?.feedbackUntil !== undefined) { clearFeedbackTimer(); state.note = null; }
+    if (state.note?.feedbackUntil !== undefined) { clearFeedbackTimer(); advanceNote(); }
     if (state.note && !state.note.expanded) {
       state.note.promptsSurvived += userSubmissions;
-      if (state.note.promptsSurvived >= 2) { state.note = null; state.skip = backoff(++state.ignored); saveTopics(); }
+      if (state.note.promptsSurvived >= 2) { advanceNote(); state.skip = backoff(++state.ignored); saveTopics(); }
     }
     userSubmissions = 0;
     save(); render(ctx);
@@ -268,10 +279,10 @@ export default function youShouldKnow(pi: ExtensionAPI) {
           configuredModel(ctx); saveSettings({ enabled: true }); save(); render(ctx);
           ctx.ui.notify("You should know is on. Checks use your model allowance.", "info"); break;
         case "off":
-          cancel(); clearFeedbackTimer(); saveSettings({ enabled: false }); state.note = null; save(); render(ctx); break;
+          cancel(); clearFeedbackTimer(); saveSettings({ enabled: false }); state.note = null; state.pendingNotes = []; save(); render(ctx); break;
         case "check":
           configuredModel(ctx); saveSettings({ enabled: true }); save(); render(ctx);
-          void check(ctx, snapshot(ctx), true); break;
+          void check(ctx, snapshot(ctx), { manual: true }); break;
         case "model": {
           if (!rest.length) { refreshSettings(); ctx.ui.notify(state.model ?? "Same model as this session", "info"); break; }
           const value = rest.join(" ");
@@ -288,7 +299,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
           await ctx.ui.editor("Last observer request and response (not sent to the main agent)", JSON.stringify({ promptSha256, ...inspection, last }, null, 2)); break;
         case "status":
           refreshSettings();
-          ctx.ui.notify(JSON.stringify({ enabled: state.enabled, model: state.model ?? "session", intervalTurns: state.intervalTurns, checking: !!active, last }, null, 2), "info"); break;
+          ctx.ui.notify(JSON.stringify({ enabled: state.enabled, model: state.model ?? "session", intervalTurns: state.intervalTurns, queued: state.pendingNotes.length, checking: !!active, last }, null, 2), "info"); break;
         default: ctx.ui.notify(`Use /${command} on|off|check|model [provider/id|session]|more|knew|dismiss|discuss|status|inspect`, "info");
       }
     },
