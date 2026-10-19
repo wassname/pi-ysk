@@ -1,10 +1,10 @@
 // PI/OpenAI: Pi UI and lifecycle for the extracted You should know observer.
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Context, Message, Usage } from "@earendil-works/pi-ai";
+import type { Context, Message, Model, Usage } from "@earendil-works/pi-ai";
 import { buildSessionContext, convertToLlm, getAgentDir, getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
-import { backoff, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, readSettings, requestObservation, requestText, resolveObserverModel, type ObserverSettings, type ObserverState } from "./observer.ts";
+import { backoff, defaultIntervalTurns, discussionDraft, explanationPrompt, lineKey, newState, observerContext, observerPrompt, promptSha256, readSettings, requestObservation, requestText, resolveObserverModel, type ObserverSettings, type ObserverState } from "./observer.ts";
 
 interface Check {
   model: string;
@@ -38,7 +38,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
   function saveSettings(update: Partial<ObserverSettings>) {
     const settings = { ...readSettings(configFile), ...update };
     const temporary = `${configFile}.${process.pid}.tmp`;
-    const json = { ...(settings.enabled ? {} : { enabled: false }), ...(settings.model === null ? {} : { model: settings.model }) };
+    const json = { ...(settings.enabled ? {} : { enabled: false }), ...(settings.model === null ? {} : { model: settings.model }), ...(settings.intervalTurns === defaultIntervalTurns ? {} : { intervalTurns: settings.intervalTurns }) };
     writeFileSync(temporary, JSON.stringify(json, null, 2) + "\n", { mode: 0o600 });
     renameSync(temporary, configFile);
     Object.assign(state, settings);
@@ -110,7 +110,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
           const model = configuredModel(ctx);
           const context = observerContext(snapshot(ctx), explanationPrompt(note.line));
           inspection = { context };
-          const result = await requestText(ctx, model, context, controller.signal);
+          const result = await requestText(ctx, model, context, controller.signal, forkOptions(ctx, model));
           if (epoch !== generation || state.note !== note) return;
           note.explanation = result.text;
           inspection.response = result.text;
@@ -132,6 +132,13 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       clearFeedbackTimer(); state.note = null;
     }
     save(); render(ctx);
+  }
+  function forkOptions(ctx: ExtensionContext, model: Model<any>) {
+    const reasoning = pi.getThinkingLevel();
+    return {
+      sessionId: ctx.sessionManager.getSessionId(),
+      reasoning: reasoning !== "off" && model.provider === ctx.model?.provider && model.id === ctx.model.id ? reasoning : undefined,
+    };
   }
   function snapshot(ctx: ExtensionContext): Message[] {
     return convertToLlm(buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages);
@@ -164,7 +171,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
       inspection = { context };
       render(ctx);
       const signal = ctx.signal ? AbortSignal.any([controller.signal, ctx.signal]) : controller.signal;
-      const result = await requestObservation(ctx, model, context, signal);
+      const result = await requestObservation(ctx, model, context, signal, forkOptions(ctx, model));
       if (epoch !== generation || signal.aborted) return;
       inspection.response = result.text;
       record.usage = result.usage;
@@ -247,7 +254,9 @@ export default function youShouldKnow(pi: ExtensionAPI) {
     save(); render(ctx);
   });
   pi.on("turn_start", (event, ctx) => {
-    if (ctx.mode === "tui" && event.turnIndex > 0 && event.turnIndex % 6 === 0) void check(ctx, snapshot(ctx));
+    if (ctx.mode !== "tui") return;
+    refreshSettings();
+    if (event.turnIndex > 0 && event.turnIndex % state.intervalTurns === 0) void check(ctx, snapshot(ctx));
   });
   pi.registerCommand(command, {
     description: "You should know: on, off, check, model [provider/id|session], more, knew, dismiss, discuss, status, inspect",
@@ -279,7 +288,7 @@ export default function youShouldKnow(pi: ExtensionAPI) {
           await ctx.ui.editor("Last observer request and response (not sent to the main agent)", JSON.stringify({ promptSha256, ...inspection, last }, null, 2)); break;
         case "status":
           refreshSettings();
-          ctx.ui.notify(JSON.stringify({ enabled: state.enabled, model: state.model ?? "session", checking: !!active, last }, null, 2), "info"); break;
+          ctx.ui.notify(JSON.stringify({ enabled: state.enabled, model: state.model ?? "session", intervalTurns: state.intervalTurns, checking: !!active, last }, null, 2), "info"); break;
         default: ctx.ui.notify(`Use /${command} on|off|check|model [provider/id|session]|more|knew|dismiss|discuss|status|inspect`, "info");
       }
     },

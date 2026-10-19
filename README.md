@@ -24,25 +24,25 @@ Reload Pi. Watching is on by default. To check immediately:
 
 Manual checks report progress and completion, including “nothing worth flagging.” Automatic checks stay quiet unless they have a note or an error.
 
-Automatic checks start at main-loop step indices 6, 12, …, as in the dumped plugin. Settings are in `~/.pi/agent/pi-ysk.json`. Suggested low-cost model, if configured in Pi:
+Automatic checks start at main-loop step indices 20, 40, …. Set a positive integer `intervalTurns` in `~/.pi/agent/pi-ysk.json` to change this. Steps are model/tool iterations within one agent run, not user messages; the count restarts for each run. Use `6` for the original Claude plugin's interval. Manual checks run immediately.
 
 ```json
 {
   "enabled": true,
-  "model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+  "intervalTurns": 20
 }
 ```
 
-This uses DeepInfra directly. The model and credentials must exist in Pi; see [compatible-endpoint configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#configure-a-compatible-endpoint).
+The observer uses the current session model by default. To select another model, add `"model": "provider/model-id"`. The model and credentials must exist in Pi; see [compatible-endpoint configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#configure-a-compatible-endpoint).
 
-Omit `model` to use the current session model. Omit `enabled` to default to on; set it to `false` to stop automatic checks. Settings apply across sessions and are reread before requests, so JSON edits need no reload. These commands write the same file:
+Omit `intervalTurns` to use 20. Omit `enabled` to default to on; set it to `false` to stop automatic checks. Settings apply across sessions and are reread before each step/check, so JSON edits need no reload. These commands write the same file:
 
 ```text
 /you-should-know model provider/model-id
 /you-should-know model session
 ```
 
-The selected provider receives the conversation and full prompt. Requests consume model usage. `/you-should-know check` enables watching and checks immediately; `/you-should-know off` stops automatic checks.
+The selected provider receives the conversation and full prompt. Same-model checks preserve the transcript's tool declarations, session cache key and reasoning level so the provider can reuse the main request's prefix. Tool calls are disabled, no tools are executed, and responses stay outside the main conversation. Cache reuse depends on the provider and matching request content; it is not guaranteed. A different model cannot share the main model's cache. Requests consume model usage. `/you-should-know check` enables watching and checks immediately; `/you-should-know off` stops automatic checks.
 
 Notes use the theme's accent colour for the star and label. With an empty input:
 
@@ -54,7 +54,7 @@ Notes use the theme's accent colour for the star and label. With an empty input:
 
 ## Source and development
 
-The prompt comes from the [Claude Code research dump](https://github.com/wassname/cc-plugin-you-should-know). Only the seen/understood topic lists are substituted. If a note omits its explanation, Learn more uses the [original explanation prompt](prompts/claude-code-2.1.292-explain.md). Topic memory is shared across sessions in `~/.pi/agent/pi-ysk-topics.json`; session controls and notes are stored outside model context. Pi cannot guarantee the same cache reuse as Claude Code.
+The prompt comes from the [Claude Code research dump](https://github.com/wassname/cc-plugin-you-should-know). Only the seen/understood topic lists are substituted. If a note omits its explanation, Learn more uses the [original explanation prompt](prompts/claude-code-2.1.292-explain.md). Topic memory is shared across sessions in `~/.pi/agent/pi-ysk-topics.json`; session controls and notes are stored outside model context. Checks use separate requests, not Claude Code's internal fork API.
 
 ```sh
 npm test

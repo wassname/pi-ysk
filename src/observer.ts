@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
-import type { AssistantMessage, Context, Message, Model, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, Message, Model, SimpleStreamOptions, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const document = readFileSync(new URL("../prompts/claude-code-2.1.292.md", import.meta.url), "utf8");
@@ -26,8 +26,10 @@ export interface Note {
   feedbackUntil?: number;
   explaining?: boolean;
 }
+export const defaultIntervalTurns = 20;
 export interface ObserverState {
   enabled: boolean;
+  intervalTurns: number;
   model: string | null;
   seen: string[];
   known: string[];
@@ -36,7 +38,7 @@ export interface ObserverState {
   skip: number;
 }
 export const newState = (): ObserverState => ({
-  enabled: true, model: null, seen: [], known: [], note: null, ignored: 0, skip: 0,
+  enabled: true, intervalTurns: defaultIntervalTurns, model: null, seen: [], known: [], note: null, ignored: 0, skip: 0,
 });
 export const lineKey = (text: string) => text.toLowerCase().trim().replace(/\.$/, "");
 export const backoff = (ignored: number) => ignored <= 2 ? 0 : Math.min(16, 2 ** (ignored - 3));
@@ -83,31 +85,26 @@ export function discussionDraft(note: Note): string {
 
 export function observerContext(messages: Message[], prompt: string): Context {
   const copied = structuredClone(messages);
-  for (const message of copied) {
-    if (message.role === "system") {
-      message.toolsAdded = [];
-      message.toolsRemoved = [];
-    }
-  }
   copied.push({ role: "user", content: prompt, timestamp: Date.now() });
   return { messages: copied, tools: [] };
 }
 
-export interface ObserverSettings { enabled: boolean; model: string | null }
+export interface ObserverSettings { enabled: boolean; model: string | null; intervalTurns: number }
 export function readSettings(path: string): ObserverSettings {
   let text: string;
   try { text = readFileSync(path, "utf8"); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { enabled: true, model: null };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { enabled: true, model: null, intervalTurns: defaultIntervalTurns };
     throw error;
   }
   const config: unknown = JSON.parse(text);
   assert(config !== null && typeof config === "object" && !Array.isArray(config), "pi-ysk.json must contain an object");
-  assert(Object.keys(config).every(key => key === "model" || key === "enabled"), "pi-ysk.json only accepts model and enabled settings");
-  const { model, enabled } = config as { model?: unknown; enabled?: unknown };
+  assert(Object.keys(config).every(key => key === "model" || key === "enabled" || key === "intervalTurns"), "pi-ysk.json only accepts model, enabled and intervalTurns settings");
+  const { model, enabled, intervalTurns } = config as { model?: unknown; enabled?: unknown; intervalTurns?: unknown };
   assert(enabled === undefined || typeof enabled === "boolean", "pi-ysk.json enabled must be true or false");
   assert(model === undefined || typeof model === "string" && /^[^/\s]+\/\S+$/.test(model), "pi-ysk.json model must be provider/model-id; omit model to use the session model");
-  return { enabled: enabled ?? true, model: model ?? null };
+  assert(intervalTurns === undefined || typeof intervalTurns === "number" && Number.isSafeInteger(intervalTurns) && intervalTurns > 0, "pi-ysk.json intervalTurns must be a positive integer");
+  return { enabled: enabled ?? true, model: model ?? null, intervalTurns: intervalTurns ?? defaultIntervalTurns };
 }
 
 export function resolveObserverModel(ctx: Pick<ExtensionContext, "model" | "modelRegistry">, override: string | null): Model<any> {
@@ -127,9 +124,11 @@ export async function requestText(
   model: Model<any>,
   context: Context,
   signal: AbortSignal,
+  options: Pick<SimpleStreamOptions, "sessionId" | "reasoning"> = {},
 ): Promise<{ text: string; usage: Usage; response: AssistantMessage }> {
+  // PI/OpenAI: share cache routing without sharing the main agent's stateful WebSocket.
   const response = await ctx.modelRegistry.streamSimple(model, context, {
-    signal, maxTokens: 4096, maxRetries: 0, toolChoice: "none",
+    ...options, signal, maxTokens: 4096, maxRetries: 0, toolChoice: "none", transport: "sse",
   }).result();
   if (signal.aborted || response.stopReason === "aborted") throw new Error("Observer check cancelled");
   if (response.stopReason !== "stop") throw new Error(response.errorMessage ?? `Observer stopped: ${response.stopReason}`);

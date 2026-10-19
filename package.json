@@ -1,6 +1,6 @@
 {
   "name": "pi-ysk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A periodic, tool-free session observer using Claude Code's You should know prompt",
   "publishConfig": { "access": "public" },
   "type": "module",

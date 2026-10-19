@@ -15,7 +15,7 @@ const response = (text: string): AssistantMessage => ({ role: "assistant", conte
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 const note = "learn: The benchmark includes training examples.\ntag: Heads up\nexplain:\n**The score includes training data**\nThis score does not measure held-out performance.";
 
-test("the exact prompt and full transcript are copied without tool declarations or main-context edits", () => {
+test("the exact prompt is appended without changing the cached transcript prefix or main context", () => {
   assert.equal(promptSha256, "e94c68d688a9a4ca97b9de8e9bc0acfa7f6db2c00c719dd294a4aae11f9520ce");
   assert.equal(observerPrompt([], []), originalPrompt);
   const dynamic = observerPrompt(["Price is $&."], ["A known topic."]);
@@ -37,7 +37,7 @@ test("the exact prompt and full transcript are copied without tool declarations 
   assert.deepEqual(messages, before);
   assert.deepEqual(copy.tools, []);
   assert.equal(copy.messages.length, messages.length + 1);
-  assert(copy.messages.filter(message => message.role === "system").every(message => !message.toolsAdded?.length));
+  assert.deepEqual(copy.messages.slice(0, -1), messages);
   assert.deepEqual(copy.messages.at(-2), messages.at(-1));
 });
 
@@ -56,6 +56,7 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     const notifications: string[] = [];
     const api = {
       on(name: string, handler: any) { events.set(name, handler); },
+      getThinkingLevel() { return "high"; },
       registerCommand(name: string, config: any) { assert.equal(name, "you-should-know"); command = config.handler; },
       appendEntry(kind: string, data: unknown) { manager.appendCustomEntry(kind, data); },
       sendMessage() { throw new Error("Observer must not inject messages"); },
@@ -84,13 +85,16 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     await command("status", ctx); assert.equal(JSON.parse(notifications.at(-1)!).enabled, true);
     await command("off", ctx); assert.equal(stored().state.enabled, false);
     const step = (index: number) => emit("turn_start", { turnIndex: index });
-    step(6); assert.equal(requests.length, 0);
+    step(20); assert.equal(requests.length, 0);
     await command("on", ctx);
-    step(5); assert.equal(requests.length, 0);
-    assert.equal(step(6), undefined); assert.equal(requests.length, 1);
-    step(12); assert.equal(requests.length, 1);
+    step(6); step(19); assert.equal(requests.length, 0);
+    assert.equal(step(20), undefined); assert.equal(requests.length, 1);
+    step(40); assert.equal(requests.length, 1);
     assert.equal(requests[0].model, model);
     assert.equal(requests[0].options.toolChoice, "none");
+    assert.equal(requests[0].options.sessionId, manager.getSessionId());
+    assert.equal(requests[0].options.reasoning, "high");
+    assert.equal(requests[0].options.transport, "sse");
     emit("input", { source: "interactive" });
     requests[0].resolve(response(note)); await flush();
     assert.equal(stored().last.outcome, "shown");
@@ -135,9 +139,18 @@ test("the extension checks asynchronously, remembers notes, supports model choic
     requests[7].resolve(response("learn: none")); await flush();
     await command("model session", ctx);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), {});
+    writeFileSync(join(dir, "pi-ysk.json"), '{"intervalTurns":3}'); emit("before_agent_start");
+    step(2); assert.equal(requests.length, 8);
+    step(3); assert.equal(requests.length, 9);
+    requests[8].resolve(response("learn: none")); await flush();
+    await command("model session", ctx);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "pi-ysk.json"), "utf8")), { intervalTurns: 3 });
+    await command("status", ctx); assert.equal(JSON.parse(notifications.at(-1)!).intervalTurns, 3);
+    writeFileSync(join(dir, "pi-ysk.json"), '{"intervalTurns":0}');
+    await assert.rejects(command("check", ctx), /intervalTurns must be a positive integer/);
     writeFileSync(join(dir, "pi-ysk.json"), '{"model":42}');
     await assert.rejects(command("check", ctx), /pi-ysk.json model must be/);
-    assert.equal(requests.length, 8);
+    assert.equal(requests.length, 9);
     assert.deepEqual(buildSessionContext(manager.getEntries()).messages, mainBefore);
     assert(!notifications.some(text => text.includes("Observer response")));
     emit("session_shutdown");
